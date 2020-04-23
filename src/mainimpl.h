@@ -15,6 +15,7 @@
 #include <QRegularExpression>
 #endif
 #include <QDir>
+#include <QMessageBox>
 #include "exceptionmanager.h"
 #include "common.h"
 #include "ui_mainview.h"
@@ -175,6 +176,7 @@ private:
 	template<class X> QList<X*>* getTabs(QWidget* tabPage = NULL);
 	template<class X> X* firstTab(QWidget* startPage = NULL);
 	void openFileTab(FileView* fv = NULL);
+	bool confirmGitOperation(const QString& title, const QString& text, bool showForceOption = false, QMessageBox::Icon icon = QMessageBox::Question, bool *outForce = nullptr);
 
 	EM_DECLARE(exExiting);
 

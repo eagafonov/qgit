@@ -6,6 +6,7 @@
 	Copyright: See COPYING file that comes with this distribution
 
 */
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QEvent>
 #include <QFileDialog>
@@ -813,6 +814,12 @@ void MainImpl::applyRevisions(SCList remoteRevs, SCRef remoteRepo) {
 }
 
 bool MainImpl::applyPatches(const QStringList &files) {
+	QString confirmationText = QString("Apply patches from %1 files").arg(files.length());
+
+	if (!confirmGitOperation("Apply patches", confirmationText)) {
+		return false;
+	}
+
 	bool workDirOnly, fold;
 	if (!askApplyPatchParameters(&workDirOnly, &fold))
 		return false;
@@ -836,6 +843,15 @@ bool MainImpl::applyPatches(const QStringList &files) {
 
 void MainImpl::rebase(const QString &from, const QString &to, const QString &onto)
 {
+	QString confirmationText = QString("Rebase from:%1 to:%2 onto:%3")
+			.arg(from)
+			.arg(to)
+			.arg(onto);
+
+	if (!confirmGitOperation("Rebase", confirmationText)) {
+		return;
+	}
+
 	bool success = false;
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
 	if (from.isEmpty()) {
@@ -853,6 +869,14 @@ void MainImpl::rebase(const QString &from, const QString &to, const QString &ont
 
 void MainImpl::merge(const QStringList &shas, const QString &into)
 {
+	QString confirmationText = QString("Merge %1 commits on %2?\n Fast-forward merge may be performed")
+								.arg(shas.length())
+								.arg(into);
+
+	if (!confirmGitOperation("Merge", confirmationText)) {
+		return;
+	}
+
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
 	QString output;
 	if (git->merge(into, shas, &output)) {
@@ -869,13 +893,24 @@ void MainImpl::merge(const QStringList &shas, const QString &into)
 
 void MainImpl::moveRef(const QString &target, const QString &toSHA)
 {
+	QString confirmationText;
+
+	bool showForceOption = false;
+
 	QString cmd;
 	if (target.startsWith("remotes/")) {
 		QString remote = target.section("/", 1, 1);
 		QString name = target.section("/", 2);
 		cmd = QString("git push -q %1 %2:%3").arg(remote, toSHA, name);
+		confirmationText = QString("Push %1 to %2/%3").arg(toSHA).arg(remote).arg(name);
+
+		// TODO detect non-fast-forward pushes
+		showForceOption = true;
+
 	} else if (target.startsWith("tags/")) {
-		cmd = QString("git tag -f %1 %2").arg(target.section("/",1), toSHA);
+		QString tag = target.section("/",1);
+		cmd = QString("git tag -f %1 %2").arg(tag, toSHA);
+		confirmationText = QString("Move tag %1 to %2").arg(tag, toSHA);
 	} else if (!target.isEmpty()) {
 		const QString &sha = git->getRefSha(target, Git::BRANCH, false);
 		if (sha.isEmpty()) return;
@@ -892,7 +927,19 @@ void MainImpl::moveRef(const QString &target, const QString &toSHA)
 			cmd = QString("git checkout -q -B %1 %2").arg(target, toSHA);
 		else // move any other local branch
 			cmd = QString("git branch -f %1 %2").arg(target, toSHA);
+		confirmationText = QString("Move branch '%1' to %2").arg(target, toSHA);
 	}
+
+	bool isForceChecked = false;
+
+	if (!confirmGitOperation("Move reference", confirmationText, showForceOption, QMessageBox::Warning, &isForceChecked)) {
+		return;
+	}
+
+	if (showForceOption && isForceChecked) {
+		cmd += " --force";
+	}
+
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
 	if (git->run(cmd)) refreshRepo(true);
 	QApplication::restoreOverrideCursor();
@@ -2053,13 +2100,34 @@ void MainImpl::ActDelete_activated() {
 	// check whether all refs will be removed
 	const QString sha = revision_variables.value("SHA").toString();
 	const QStringList &children = git->getChildren(sha);
-	if ((children.count() == 0 || (children.count() == 1 && children.front() == ZERO_SHA)) && // no children
-	    remaining.count() == 0 && // all refs will be removed
-	    QMessageBox::warning(this, "remove references",
-	                         "Do you really want to remove all\nremaining references to this branch?",
-	                         QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
-	    == QMessageBox::No)
+
+	const bool isLastReferences =
+		(children.count() == 0 || (children.count() == 1 && children.front() == ZERO_SHA)) && // no children
+		remaining.count() == 0; // all refs will be removed
+
+	QString confirmationText = QString("Remove %1 reference(s)?").arg(groups.size());
+
+	for (RefGroupMap::const_iterator g = groups.begin(), gend = groups.end(); g != gend; ++g) {
+		if (g.key() == "") {
+			confirmationText += QString("\nbranch '%1'").arg(g.value().join(' '));
+		} else if (g.key() == "tags/") {
+			confirmationText += QString("\ntags '%1'").arg(g.value().join(' '));
+		} else {
+			confirmationText += QString("\nremote branch '%1'").arg(g.value().join(' '));
+		}
+	}
+
+
+	QMessageBox::Icon icon = QMessageBox::Question;
+
+	if (isLastReferences) {
+		confirmationText += "\n\nWarning! This is the last reference";
+		icon = QMessageBox::Warning;
+	}
+
+	if (!confirmGitOperation("Remove references", confirmationText, false, icon)) {
 		return;
+	}
 
 	// group selected names by origin
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
@@ -2334,4 +2402,22 @@ void MainImpl::ActClose_activated() {
 void MainImpl::ActExit_activated() {
 
 	qApp->closeAllWindows();
+}
+
+bool MainImpl::confirmGitOperation(const QString& title, const QString& text, bool showForceOption /*= false*/, QMessageBox::Icon icon /*= QMessageBox::Question*/, bool *outForce /*= nullptr*/)
+{
+	QMessageBox msgBox(icon, title, text,
+						QMessageBox::Yes|QMessageBox::No);
+
+	if (showForceOption) {
+		msgBox.setCheckBox(new QCheckBox("Force"));
+	}
+
+	auto result = msgBox.exec() == QMessageBox::Yes;
+
+	if (outForce != nullptr) {
+		*outForce = showForceOption && msgBox.checkBox()->checkState() == Qt::Checked;
+	}
+
+	return result;
 }
