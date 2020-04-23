@@ -170,6 +170,7 @@ private:
 	template<class X> QList<X*>* getTabs(QWidget* tabPage = NULL);
 	template<class X> X* firstTab(QWidget* startPage = NULL);
 	void openFileTab(FileView* fv = NULL);
+    bool confirmGitOperation(const QString& title, const QString& text);
 
 	EM_DECLARE(exExiting);
 
