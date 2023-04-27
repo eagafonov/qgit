@@ -1396,7 +1396,7 @@ void MainImpl::doUpdateRecentRepoMenu(SCRef newEntry) {
 	settings.setValue(REC_REP_KEY, newRecents);
 }
 
-static void prepareRefSubmenu(QMenu* menu, const QStringList& refs, const QChar sep = '/') {
+static void prepareRefSubmenu(QMenu* menu, const QStringList& refs, const QChar sep = '/', const QString& dataTag = "Ref") {
 
 	FOREACH_SL (it, refs) {
 		const QStringList& parts(it->split(sep, QGIT_SPLITBEHAVIOR(SkipEmptyParts)));
@@ -1415,7 +1415,7 @@ static void prepareRefSubmenu(QMenu* menu, const QStringList& refs, const QChar 
 			add_here = found;
 		}
 		QAction* act = add_here->addAction(*it);
-		act->setData("Ref");
+		act->setData(dataTag);
 	}
 }
 
@@ -1425,8 +1425,10 @@ void MainImpl::doContexPopup(SCRef sha) {
 	QMenu contextBrnMenu("Branches...", this);
 	QMenu contextRmtMenu("Remote branches...", this);
 	QMenu contextTagMenu("Tags...", this);
+	QMenu contextPushToRemoteMenu("Push to remote...", this);
 
 	connect(&contextMenu, SIGNAL(triggered(QAction*)), this, SLOT(goRef_triggered(QAction*)));
+	connect(&contextMenu, SIGNAL(triggered(QAction*)), this, SLOT(pushToRemote_triggered(QAction*)));
 
 	Domain* t;
 	int tt = currentTabType(&t);
@@ -1454,7 +1456,9 @@ void MainImpl::doContexPopup(SCRef sha) {
 
 		auto selected_name = revision_variables.value(SELECTED_NAME).toString();
 		auto local_branches = revision_variables.value(REV_LOCAL_BRANCHES).toStringList();
+		auto tags = revision_variables.value(REV_TAGS).toStringList();
 		bool isLocalBranchSelected = !selected_name.isEmpty() && local_branches.contains(selected_name);
+		bool isTagSelected = !selected_name.isEmpty() && selected_name.startsWith("tags/") && tags.contains(selected_name.mid(5));
 
 		if (ActCommit->isEnabled() && (sha == ZERO_SHA))
 			contextMenu.addAction(ActCommit);
@@ -1496,6 +1500,19 @@ void MainImpl::doContexPopup(SCRef sha) {
 		contextMenu.addMenu(&contextTagMenu);
 		contextTagMenu.setEnabled(tn.size() > 0);
 
+		QStringList remotes = git->getAllRemoteNames();
+		bool pushEnabled = isLocalBranchSelected || isTagSelected;
+
+		if (remotes.size() == 1) {
+			QAction* actPushToRemote = contextMenu.addAction(QString("Push to %1").arg(remotes.first()));
+			actPushToRemote->setIconText(remotes.first());
+			actPushToRemote->setData("PushToRemote");
+			actPushToRemote->setEnabled(pushEnabled);
+		} else if (remotes.size() > 1) {
+			prepareRefSubmenu(&contextPushToRemoteMenu, remotes, '/', "PushToRemote");
+			contextMenu.addMenu(&contextPushToRemoteMenu);
+			contextPushToRemoteMenu.setEnabled(pushEnabled);
+		}
 	}
 
 	QPoint p = QCursor::pos();
@@ -1553,6 +1570,58 @@ void MainImpl::goRef_triggered(QAction* act) {
 	SCRef refSha(git->getRefSha(act->iconText()));
 	rv->st.setSha(refSha);
 	UPDATE_DOMAIN(rv);
+}
+
+void MainImpl::pushToRemote_triggered(QAction* act) {
+
+	if (!act || act->data() != "PushToRemote")
+		return;
+
+	const QString remote = act->iconText();
+	const QString selected = revision_variables.value(SELECTED_NAME).toString();
+	const QStringList tags = revision_variables.value(REV_TAGS).toStringList();
+	const QStringList localBranches = revision_variables.value(REV_LOCAL_BRANCHES).toStringList();
+
+	if (selected.isEmpty()) {
+		statusBar()->showMessage("No branch or tag selected");
+		return;
+	}
+
+	QString cmd;
+	QString confirmationText;
+	QString displayName;
+
+	if (localBranches.contains(selected)) {
+		cmd = QString("git push -q %1 %2").arg(remote, selected);
+		confirmationText = QString("Push branch '%1' to remote '%2'").arg(selected, remote);
+		displayName = selected;
+	} else if (selected.startsWith("tags/") && tags.contains(selected.mid(5))) {
+		const QString tagName = selected.mid(5);
+		cmd = QString("git push -q %1 tag %2").arg(remote, tagName);
+		confirmationText = QString("Push tag '%1' to remote '%2'").arg(tagName, remote);
+		displayName = tagName;
+	} else {
+		statusBar()->showMessage("Selected ref is not a local branch or tag");
+		return;
+	}
+
+	bool isForceChecked = false;
+	if (!confirmGitOperation("Push to remote", confirmationText, true, QMessageBox::Question, &isForceChecked))
+		return;
+
+	if (isForceChecked)
+		cmd += " --force";
+
+	qDebug() << "cmd:" << cmd;
+
+	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+	if (git->run(cmd)) {
+		refreshRepo(true);
+		statusBar()->showMessage(QString("Successfully pushed '%1' to '%2'").arg(displayName, remote), 5000);
+	} else {
+		statusBar()->showMessage(QString("Failed to push '%1' to '%2'").arg(displayName, remote), 5000);
+	}
+	QApplication::restoreOverrideCursor();
 }
 
 void MainImpl::ActSplitView_activated() {

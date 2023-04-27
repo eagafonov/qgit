@@ -95,6 +95,7 @@ protected slots:
 	void customAction_triggered(QAction*);
 	void customAction_exited(const QString& name);
 	void goRef_triggered(QAction*);
+	void pushToRemote_triggered(QAction*);
 	void changesCommitted(bool);
 	void lineEditSHA_returnPressed();
 	void lineEditFilter_returnPressed();
