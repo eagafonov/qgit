@@ -151,6 +151,8 @@ public:
 	void setCurContext(Domain* d) { curDomain = d; }
 	Domain* curContext() const { return curDomain; }
 
+	QStringList getAllRemoteNames();
+
 signals:
 	void newRevsAdded(const FileHistory*, const QVector<ShaString>&);
 	void loadCompleted(const FileHistory*, const QString&);
