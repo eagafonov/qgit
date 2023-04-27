@@ -3197,3 +3197,12 @@ void Git::indexTree() {
         }
 }
 
+QStringList Git::getAllRemoteNames() {
+	QString cmdOutput;
+
+	if (run("git remote", &cmdOutput)) {
+		return cmdOutput.split('\n', Qt::SkipEmptyParts);
+	} else {
+		return QStringList();
+	}
+};
