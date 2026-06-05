@@ -12,6 +12,8 @@
 
 */
 #include <QDir>
+#include <QCoreApplication>
+#include <QFile>
 #include <QHash>
 #include <QPixmap>
 #include <QProcess>
@@ -546,6 +548,21 @@ bool QGit::startProcess(QProcess* proc, SCList args, SCRef buf, bool* winShell) 
 	QStringList env = QProcess::systemEnvironment();
 	env << "GIT_TRACE=0"; // avoid choking on debug traces
 	env << "GIT_FLUSH=0"; // skip the fflush() in 'git log'
+
+	// Set up askpass helper for SSH/Git password prompts
+	QString askpass = QCoreApplication::applicationDirPath() + "/qgit-askpass.sh";
+	if (QFile::exists(askpass)) {
+		env << "SSH_ASKPASS=" + askpass;
+		env << "GIT_ASKPASS=" + askpass;
+		env << "SSH_ASKPASS_REQUIRE=force";
+	} else {
+		static bool warned = false;
+		if (!warned) {
+			qWarning("Askpass helper not found at: %s", qPrintable(askpass));
+			warned = true;
+		}
+	}
+
 	proc->setEnvironment(env);
 
 	proc->start(prog, arguments); // TODO test QIODevice::Unbuffered

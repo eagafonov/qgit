@@ -154,6 +154,7 @@ add_executable(qgit ${CPP_SOURCES} ${CPP_HEADERS} ${UIS_HDRS} ${RC_SRCS})
 target_link_libraries(qgit ${QT_LIBRARIES})
 
 install(TARGETS qgit DESTINATION bin)
+install(PROGRAMS src/qgit-askpass.sh DESTINATION bin)
 
 if (UNIX)
     install(FILES src/resources/qgit.png DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/48x48/apps)
