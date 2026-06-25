@@ -96,6 +96,37 @@ set(CPP_SOURCES
     src/treeview.cpp
 )
 
+set(CPP_HEADERS
+    src/annotate.h
+    src/cache.h
+    src/commitimpl.h
+    src/common.h
+    src/config.h
+    src/consoleimpl.h
+    src/customactionimpl.h
+    src/dataloader.h
+    src/domain.h
+    src/exceptionmanager.h
+    src/filecontent.h
+    src/FileHistory.h
+    src/filelist.h
+    src/fileview.h
+    src/git.h
+    src/lanes.h
+    src/listview.h
+    src/inputdialog.h
+    src/mainimpl.h
+    src/myprocess.h
+    src/patchcontent.h
+    src/patchview.h
+    src/rangeselectimpl.h
+    src/revdesc.h
+    src/revsview.h
+    src/settingsimpl.h
+    src/smartbrowse.h
+    src/treeview.h
+)
+
 # UIS_HDRS will be used later in add_executable
 qt_wrap_ui(UIS_HDRS
     src/commit.ui
@@ -119,7 +150,7 @@ set(RESOURCE_FILES
 # in result SAMPLE_RC_SRCS variable will contain paths to files produced by rcc
 qt_add_resources(RC_SRCS ${RESOURCE_FILES})
 
-add_executable(qgit ${CPP_SOURCES} ${UIS_HDRS} ${RC_SRCS})
+add_executable(qgit ${CPP_SOURCES} ${CPP_HEADERS} ${UIS_HDRS} ${RC_SRCS})
 target_link_libraries(qgit ${QT_LIBRARIES})
 
 install(TARGETS qgit DESTINATION bin)
