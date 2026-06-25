@@ -203,8 +203,8 @@ public:
 	ExternalDiffProc(const QStringList& f, QObject* p)
 		: QProcess(p), filenames(f) {
 
-		connect(this, SIGNAL(finished(int, QProcess::ExitStatus)),
-		        this, SLOT(on_finished(int, QProcess::ExitStatus)));
+		connect(this, SIGNAL(finished(int,QProcess::ExitStatus)),
+				this, SLOT(on_finished(int,QProcess::ExitStatus)));
 	}
 	~ExternalDiffProc() {
 
@@ -235,8 +235,8 @@ public:
 	ExternalEditorProc(QObject* p)
 	    : QProcess(p) {
 
-		connect(this, SIGNAL(finished(int, QProcess::ExitStatus)),
-		        this, SLOT(on_finished(int, QProcess::ExitStatus)));
+		connect(this, SIGNAL(finished(int,QProcess::ExitStatus)),
+				this, SLOT(on_finished(int,QProcess::ExitStatus)));
 	}
 	~ExternalEditorProc() {
 		terminate();
