@@ -220,6 +220,7 @@ private:
 	void init2();
 	bool run(SCRef cmd, QString* out = NULL, QObject* rcv = NULL, SCRef buf = "");
 	bool run(QByteArray* runOutput, SCRef cmd, QObject* rcv = NULL, SCRef buf = "");
+	bool runWithStderr(SCRef cmd, QString* stdOut, QString* stdErr, SCRef buf = "");
 	MyProcess* runAsync(SCRef cmd, QObject* rcv, SCRef buf = "");
 	MyProcess* runAsScript(SCRef cmd, QObject* rcv = NULL, SCRef buf = "");
 	const QStringList getArgs(bool* quit, bool repoChanged);
