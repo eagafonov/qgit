@@ -1259,10 +1259,6 @@ const RevFile* Git::getFiles(SCRef sha, SCRef diffToSha, bool allFiles, SCRef pa
 	const Rev* r = revLookup(sha);
 	if (!r)
 		return NULL;
-
-	if (r->parentsCount() == 0) // skip initial rev
-		return NULL;
-
 	if (r->parentsCount() > 1 && diffToSha.isEmpty() && allFiles)
 		return getAllMergeFiles(r);
 
@@ -1293,7 +1289,7 @@ const RevFile* Git::getFiles(SCRef sha, SCRef diffToSha, bool allFiles, SCRef pa
 
 	EM_PROCESS_EVENTS; // 'git diff-tree' could be slow
 
-	QString runCmd("git diff-tree --no-color -r -c " + sha), runOutput;
+	QString runCmd("git diff-tree --no-color -r -c --root " + sha), runOutput;
 	if (!runDiffTreeWithRenameDetection(runCmd, &runOutput))
 		return NULL;
 
