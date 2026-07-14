@@ -544,6 +544,18 @@ bool Git::run(QByteArray* runOutput, SCRef runCmd, QObject* receiver, SCRef buf)
 	return p.runSync(runCmd, runOutput, receiver, buf);
 }
 
+bool Git::runWithStderr(SCRef runCmd, QString* stdOut, QString* stdErr, SCRef buf) {
+
+	QByteArray ba;
+	MyProcess p(parent(), this, workDir, errorReportingEnabled);
+	bool ret = p.runSync(runCmd, stdOut ? &ba : NULL, NULL, buf);
+	if (stdOut)
+		*stdOut = ba;
+	if (stdErr)
+		*stdErr = p.getErrorOutput();
+	return ret;
+}
+
 MyProcess* Git::runAsync(SCRef runCmd, QObject* receiver, SCRef buf) {
 
 	MyProcess* p = new MyProcess(parent(), this, workDir, errorReportingEnabled);

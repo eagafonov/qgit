@@ -143,8 +143,9 @@ void MyProcess::on_readyReadStandardError() {
 		QByteArray err = readAllStandardError();
 		accError += err;
 		emit procDataReady(err); // redirect to stdout
-	} else
-		dbs("ASSERT in myReadFromStderr: NULL receiver");
+	} else {
+		accError += readAllStandardError();
+	}
 }
 
 void MyProcess::on_finished(int exitCode, QProcess::ExitStatus exitStatus) {
