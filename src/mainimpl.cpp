@@ -14,6 +14,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
@@ -836,6 +837,22 @@ bool MainImpl::applyPatches(const QStringList &files) {
 
 void MainImpl::rebase(const QString &from, const QString &to, const QString &onto)
 {
+	QString confirmationText;
+	if (from.isEmpty()) {
+		confirmationText = QString("Rebase '%1'\nonto: %2")
+				.arg(shortenSha(to))
+				.arg(shortenSha(onto));
+	} else {
+		confirmationText = QString("Rebase '%1'\nfrom: %2\nonto: %3")
+				.arg(shortenSha(to))
+				.arg(shortenSha(from))
+				.arg(shortenSha(onto));
+	}
+
+	if (!confirmGitOperation("Rebase", confirmationText)) {
+		return;
+	}
+
 	bool success = false;
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
 	if (from.isEmpty()) {
@@ -853,6 +870,14 @@ void MainImpl::rebase(const QString &from, const QString &to, const QString &ont
 
 void MainImpl::merge(const QStringList &shas, const QString &into)
 {
+	QString confirmationText = QString("Merge %1 commit(s) into '%2'?\nFast-forward merge may be performed")
+								.arg(shas.length())
+								.arg(shortenSha(into));
+
+	if (!confirmGitOperation("Merge", confirmationText)) {
+		return;
+	}
+
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
 	QString output;
 	if (git->merge(into, shas, &output)) {
@@ -869,13 +894,24 @@ void MainImpl::merge(const QStringList &shas, const QString &into)
 
 void MainImpl::moveRef(const QString &target, const QString &toSHA)
 {
+	QString confirmationText;
+
+	bool isPush = false;
+
 	QString cmd;
 	if (target.startsWith("remotes/")) {
 		QString remote = target.section("/", 1, 1);
 		QString name = target.section("/", 2);
 		cmd = QString("git push -q %1 %2:%3").arg(remote, toSHA, name);
+		confirmationText = QString("Push %1\nto: %2/%3").arg(shortenSha(toSHA)).arg(remote).arg(name);
+
+		// TODO detect non-fast-forward pushes
+		isPush = true;
+
 	} else if (target.startsWith("tags/")) {
-		cmd = QString("git tag -f %1 %2").arg(target.section("/",1), toSHA);
+		QString tag = target.section("/",1);
+		cmd = QString("git tag -f %1 %2").arg(tag, toSHA);
+		confirmationText = QString("Move tag '%1'\nto: %2").arg(tag, shortenSha(toSHA));
 	} else if (!target.isEmpty()) {
 		const QString &sha = git->getRefSha(target, Git::BRANCH, false);
 		if (sha.isEmpty()) return;
@@ -892,7 +928,21 @@ void MainImpl::moveRef(const QString &target, const QString &toSHA)
 			cmd = QString("git checkout -q -B %1 %2").arg(target, toSHA);
 		else // move any other local branch
 			cmd = QString("git branch -f %1 %2").arg(target, toSHA);
+		confirmationText = QString("Move branch '%1'\nto: %2").arg(target, shortenSha(toSHA));
 	}
+
+	if (isPush) {
+		auto confirmation = confirmGitPush(confirmationText);
+		if (confirmation == PushCancelled)
+			return;
+
+		if (confirmation == PushForced)
+			cmd += " --force";
+	} else {
+		if (!confirmGitOperation("Move reference", confirmationText, QMessageBox::Warning))
+			return;
+	}
+
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
 	if (git->run(cmd)) refreshRepo(true);
 	QApplication::restoreOverrideCursor();
@@ -2053,13 +2103,34 @@ void MainImpl::ActDelete_activated() {
 	// check whether all refs will be removed
 	const QString sha = revision_variables.value("SHA").toString();
 	const QStringList &children = git->getChildren(sha);
-	if ((children.count() == 0 || (children.count() == 1 && children.front() == ZERO_SHA)) && // no children
-	    remaining.count() == 0 && // all refs will be removed
-	    QMessageBox::warning(this, "remove references",
-	                         "Do you really want to remove all\nremaining references to this branch?",
-	                         QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
-	    == QMessageBox::No)
+
+	const bool isLastReferences =
+		(children.count() == 0 || (children.count() == 1 && children.front() == ZERO_SHA)) && // no children
+		remaining.count() == 0; // all refs will be removed
+
+	QString confirmationText = QString("Remove %1 reference(s)?").arg(groups.size());
+
+	for (RefGroupMap::const_iterator g = groups.begin(), gend = groups.end(); g != gend; ++g) {
+		if (g.key() == "") {
+			confirmationText += QString("\nbranch '%1'").arg(g.value().join(' '));
+		} else if (g.key() == "tags/") {
+			confirmationText += QString("\ntags '%1'").arg(g.value().join(' '));
+		} else {
+			confirmationText += QString("\nremote branch '%1'").arg(g.value().join(' '));
+		}
+	}
+
+
+	QMessageBox::Icon icon = QMessageBox::Question;
+
+	if (isLastReferences) {
+		confirmationText += "\n\nWarning! This is the last reference";
+		icon = QMessageBox::Warning;
+	}
+
+	if (!confirmGitOperation("Remove references", confirmationText, icon)) {
 		return;
+	}
 
 	// group selected names by origin
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
@@ -2334,4 +2405,71 @@ void MainImpl::ActClose_activated() {
 void MainImpl::ActExit_activated() {
 
 	qApp->closeAllWindows();
+}
+
+static bool isHexDigit(const QChar c) {
+	return    (c >= '0' && c <= '9')
+	       || (c >= 'a' && c <= 'f')
+	       || (c >= 'A' && c <= 'F');
+}
+
+QString MainImpl::shortenSha(const QString& ref) const
+{
+	// Only abbreviate full 40-char hex SHAs; leave ref names (branches, tags)
+	// untouched so they stay recognizable.
+	if (ref.length() != 40)
+		return ref;
+
+	for (const QChar c : ref) {
+		if (!isHexDigit(c))
+			return ref;
+	}
+
+	return ref.left(git->shortHashLength());
+}
+
+MainImpl::PushConfirmation MainImpl::confirmGitPush(const QString& text)
+{
+	QMessageBox msgBox(QMessageBox::Question, "Push to remote", text,
+	                   QMessageBox::NoButton, this);
+
+	// Order matters: on most styles the buttons are laid out by role, and we
+	// deliberately keep the destructive option away from the default one.
+	QAbstractButton* pushBtn = msgBox.addButton("&Push", QMessageBox::AcceptRole);
+	QAbstractButton* forceBtn = msgBox.addButton("&Force push", QMessageBox::DestructiveRole);
+	QAbstractButton* cancelBtn = msgBox.addButton("&Cancel", QMessageBox::RejectRole);
+
+	forceBtn->setToolTip("Pass --force to git push.\n\n"
+	                     "Usually git refuses to update a remote ref that is not an\n"
+	                     "ancestor of the local ref used to overwrite it. This disables\n"
+	                     "that check, and can cause the remote repository to lose\n"
+	                     "commits; use it with care.");
+
+	// A plain push is the safe choice, so make it the default action and the
+	// one triggered by Enter. Escape maps to Cancel via its RejectRole.
+	if (QPushButton* defBtn = qobject_cast<QPushButton*>(pushBtn)) {
+		defBtn->setDefault(true);
+		msgBox.setDefaultButton(defBtn);
+	}
+	if (QPushButton* escBtn = qobject_cast<QPushButton*>(cancelBtn))
+		msgBox.setEscapeButton(escBtn);
+
+	msgBox.exec();
+
+	QAbstractButton* clicked = msgBox.clickedButton();
+	if (clicked == pushBtn)
+		return PushNormal;
+	if (clicked == forceBtn)
+		return PushForced;
+
+	// Covers Cancel and closing the dialog via the window decoration.
+	return PushCancelled;
+}
+
+bool MainImpl::confirmGitOperation(const QString& title, const QString& text, QMessageBox::Icon icon /*= QMessageBox::Question*/)
+{
+	QMessageBox msgBox(icon, title, text,
+						QMessageBox::Yes|QMessageBox::No, this);
+
+	return msgBox.exec() == QMessageBox::Yes;
 }
