@@ -94,6 +94,7 @@ set(CPP_SOURCES
     src/settingsimpl.cpp
     src/smartbrowse.cpp
     src/treeview.cpp
+    src/worktreeview.cpp
 )
 
 set(CPP_HEADERS
@@ -125,6 +126,7 @@ set(CPP_HEADERS
     src/settingsimpl.h
     src/smartbrowse.h
     src/treeview.h
+    src/worktreeview.h
 )
 
 # UIS_HDRS will be used later in add_executable

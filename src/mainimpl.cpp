@@ -7,14 +7,18 @@
 
 */
 #include <QCloseEvent>
+#include <QDir>
 #include <QEvent>
 #include <QFileDialog>
+#include <QGuiApplication>
+#include <QGridLayout>
 #include <QInputDialog>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
@@ -40,6 +44,7 @@
 #include "revsview.h"
 #include "settingsimpl.h"
 #include "treeview.h"
+#include "worktreeview.h"
 #include "ui_help.h"
 #include "ui_revsview.h"
 #include "ui_fileview.h"
@@ -138,9 +143,12 @@ connect(tabWdg, SIGNAL(tabCloseRequested(int)), SLOT(tabBar_tabCloseRequested(in
 	pbFileNamesLoading->hide();
 	statusBar()->addPermanentWidget(pbFileNamesLoading);
 
-	QVector<QSplitter*> v(1, treeSplitter);
+	QVector<QSplitter*> v;
+	v << treeSplitter << leftSplitter;
 	QGit::restoreGeometrySetting(QGit::MAIN_GEOM_KEY, this, &v);
 	treeView->hide();
+	worktreeView->hide();
+	updateLeftPaneVisibility();
 
 	// set-up menu for recent visited repositories
 	connect(File, SIGNAL(triggered(QAction*)), this, SLOT(openRecent_triggered(QAction*)));
@@ -178,6 +186,19 @@ connect(tabWdg, SIGNAL(tabCloseRequested(int)), SLOT(tabBar_tabCloseRequested(in
 
 	connect(treeView, SIGNAL(itemDoubleClicked(QTreeWidgetItem*, int)),
 	        this, SLOT(treeView_doubleClicked(QTreeWidgetItem*, int)));
+
+	// queued: handlers reload the repository, which rebuilds the worktree
+	// list and deletes the item whose signal is still being emitted
+	connect(worktreeView, SIGNAL(switchRequested(const QString&)),
+	        this, SLOT(switchToWorktree(const QString&)), Qt::QueuedConnection);
+	connect(worktreeView, SIGNAL(removeRequested(const QString&)),
+	        this, SLOT(removeWorktree(const QString&)), Qt::QueuedConnection);
+	connect(worktreeView, SIGNAL(refreshRequested()),
+	        this, SLOT(ActRefresh_activated()), Qt::QueuedConnection);
+	connect(worktreeView, SIGNAL(pruneRequested()),
+	        this, SLOT(pruneWorktrees()), Qt::QueuedConnection);
+	connect(worktreeView, SIGNAL(showStatusMessage(QString,int)),
+	        statusBar(), SLOT(showMessage(QString,int)));
 
 	// use most recent repo as startup dir if it exists and user opted to do so
 	QStringList recents(settings.value(REC_REP_KEY).toStringList());
@@ -230,7 +251,8 @@ void MainImpl::initWithEventLoopActive() {
 
 void MainImpl::saveCurrentGeometry() {
 
-	QVector<QSplitter*> v(1, treeSplitter);
+	QVector<QSplitter*> v;
+	v << treeSplitter << leftSplitter;
 	QGit::saveGeometrySetting(QGit::MAIN_GEOM_KEY, this, &v);
 }
 
@@ -476,6 +498,8 @@ void MainImpl::setRepository(SCRef newDir, bool refresh, bool keepSelection,
 			setWindowTitle(windowTitle() + " - FILTER ON < " +
 					passedArgs->join(" ") + " >");
 
+		worktreeView->setWorktrees(git->getWorktrees());
+
 		updateCommitMenu(ok && git->isStGITStack());
 		ActCheckWorkDir->setChecked(testFlag(DIFF_INDEX_F)); // could be changed in Git::init()
 
@@ -515,6 +539,7 @@ void MainImpl::updateGlobalActions(bool b) {
 	ActViewDiff->setEnabled(b);
 	ActViewDiffNewTab->setEnabled(b && firstTab<PatchView>());
 	ActShowTree->setEnabled(b);
+	ActShowWorktrees->setEnabled(b);
 	ActMailApplyPatch->setEnabled(b);
 	ActMailFormatPatch->setEnabled(b);
 
@@ -573,6 +598,7 @@ void MainImpl::updateContextActions(SCRef newRevSha, SCRef newFileName,
 
 	ActMarkDiffToSha->setEnabled(newRevSha != ZERO_SHA);
 	ActCheckout->setEnabled(found && (newRevSha != ZERO_SHA) && !isUnApplied);
+	ActCreateWorktree->setEnabled(found && (newRevSha != ZERO_SHA) && !isUnApplied);
 	ActBranch->setEnabled(found && (newRevSha != ZERO_SHA) && !isUnApplied);
 	ActBranchRename->setEnabled(ref_type | Git::BRANCH);
 	ActTag->setEnabled(found && (newRevSha != ZERO_SHA) && !isUnApplied);
@@ -1432,12 +1458,36 @@ void MainImpl::doContexPopup(SCRef sha) {
 
 	connect(&contextMenu, SIGNAL(triggered(QAction*)), this, SLOT(goRef_triggered(QAction*)));
 	connect(&contextMenu, SIGNAL(triggered(QAction*)), this, SLOT(pushToRemote_triggered(QAction*)));
+	connect(&contextMenu, SIGNAL(triggered(QAction*)), this, SLOT(switchWorktree_triggered(QAction*)));
 
 	Domain* t;
 	int tt = currentTabType(&t);
 	bool isRevPage = (tt == TAB_REV);
 	bool isPatchPage = (tt == TAB_PATCH);
 	bool isFilePage = (tt == TAB_FILE);
+
+	// determine the ref tag the user right-clicked (if any) and whether
+	// it is a branch checked out in another worktree
+	bool branchInOtherWorktree = false;
+	if (isRevPage) {
+		updateRevVariables(sha);
+
+		const QString selected_name = revision_variables.value(SELECTED_NAME).toString();
+		const QStringList local_branches = revision_variables.value(REV_LOCAL_BRANCHES).toStringList();
+		branchInOtherWorktree = !selected_name.isEmpty()
+		    && local_branches.contains(selected_name)
+		    && git->isBranchInOtherWorktree(selected_name);
+
+		// 'Switch to worktree' goes on top of the context menu: checkout is
+		// not possible for a branch checked out in another worktree, offer to
+		// switch to that worktree instead
+		if (branchInOtherWorktree) {
+			SCRef wtPath = git->otherWorktreeOfBranch(selected_name);
+			QAction* actSwitchWorktree = contextMenu.addAction(
+			    QString("Switch to worktree %1").arg(QDir(wtPath).dirName()));
+			actSwitchWorktree->setData("SwitchWorktree");
+		}
+	}
 
 	if (isFilePage && ActViewRev->isEnabled())
 		contextMenu.addAction(ActViewRev);
@@ -1458,8 +1508,6 @@ void MainImpl::doContexPopup(SCRef sha) {
 		contextMenu.addAction(ActExternalEditor);
 
 	if (isRevPage) {
-		updateRevVariables(sha);
-
 		auto selected_name = revision_variables.value(SELECTED_NAME).toString();
 		auto local_branches = revision_variables.value(REV_LOCAL_BRANCHES).toStringList();
 		auto tags = revision_variables.value(REV_TAGS).toStringList();
@@ -1468,8 +1516,10 @@ void MainImpl::doContexPopup(SCRef sha) {
 
 		if (ActCommit->isEnabled() && (sha == ZERO_SHA))
 			contextMenu.addAction(ActCommit);
-		if (ActCheckout->isEnabled())
+		if (ActCheckout->isEnabled() && !branchInOtherWorktree)
 			contextMenu.addAction(ActCheckout);
+		if (ActCreateWorktree->isEnabled())
+			contextMenu.addAction(ActCreateWorktree);
 		if (ActBranchRename->isEnabled() && isLocalBranchSelected)
 			contextMenu.addAction(ActBranchRename);
 		if (ActBranch->isEnabled())
@@ -1628,6 +1678,129 @@ void MainImpl::pushToRemote_triggered(QAction* act) {
 	QApplication::restoreOverrideCursor();
 }
 
+void MainImpl::switchWorktree_triggered(QAction* act) {
+
+	if (!act || act->data() != "SwitchWorktree")
+		return;
+
+	const QString selected = revision_variables.value(SELECTED_NAME).toString();
+	switchToWorktree(git->otherWorktreeOfBranch(selected));
+}
+
+void MainImpl::switchToWorktree(const QString& path) {
+
+	if (path.isEmpty())
+		return;
+
+	statusBar()->showMessage("Switched to worktree: " + path);
+	setRepository(path, false, false); // reload current window at the other worktree
+}
+
+void MainImpl::pruneWorktrees() {
+
+	QStringList paths;
+	const Git::WorktreeList& list = git->getWorktrees();
+	for (int i = 0; i < list.size(); i++)
+		if (list.at(i).isPrunable)
+			paths.append(list.at(i).path);
+
+	if (paths.isEmpty()) {
+		statusBar()->showMessage("No missing worktrees to prune", 5000);
+		return;
+	}
+
+	// 'git worktree prune' removes administrative data of all worktrees with
+	// a missing directory, except locked ones; it cannot target a single one
+	QMessageBox box(QMessageBox::Question, "Prune worktrees",
+	        QString("The directories of these worktrees are missing:\n\n%1\n\n"
+	                "Prune their stale entries?").arg(paths.join("\n")),
+	        QMessageBox::Yes | QMessageBox::Cancel, this);
+	box.setDefaultButton(QMessageBox::Cancel);
+
+	// QMessageBox caps its width and wraps long absolute paths, a spacer
+	// as wide as the longest path is the only way to widen it
+	int pathWidth = 0;
+	for (int i = 0; i < paths.size(); i++)
+		pathWidth = qMax(pathWidth, box.fontMetrics().horizontalAdvance(paths.at(i)));
+	const int maxWidth = QGuiApplication::primaryScreen()->availableGeometry().width() * 3 / 4;
+	QGridLayout* grid = qobject_cast<QGridLayout*>(box.layout());
+	if (grid)
+		grid->addItem(new QSpacerItem(qMin(pathWidth + 100, maxWidth), 0,
+		                              QSizePolicy::Minimum, QSizePolicy::Expanding),
+		              grid->rowCount(), 0, 1, grid->columnCount());
+
+	if (box.exec() != QMessageBox::Yes)
+		return;
+
+	if (git->run("git worktree prune"))
+		statusBar()->showMessage(QString("Pruned %1 worktree(s)").arg(paths.size()), 5000);
+	else
+		statusBar()->showMessage("Failed to prune worktrees");
+	refreshRepo(true);
+}
+
+void MainImpl::removeWorktree(const QString& path) {
+
+	const Git::WorktreeInfo* wtPtr = worktreeView->worktreeOf(path);
+	if (!wtPtr)
+		return;
+
+	const Git::WorktreeInfo wt(*wtPtr); // copy, the list is rebuilt on refresh
+	const QString name(QDir(wt.path).dirName());
+	const QString title("Remove worktree - " + name);
+
+	// check for uncommitted modifications before git refuses the removal,
+	// so that the user can be told what would be lost
+	QString statusOut;
+	git->errorReportingEnabled = false;
+	bool statusOk = git->run("git -C " + Git::quote(wt.path) + " status --porcelain", &statusOut);
+	git->errorReportingEnabled = true;
+	int dirtyCnt = statusOut.split('\n', QGIT_SPLITBEHAVIOR(SkipEmptyParts)).count();
+	bool warn = !statusOk || dirtyCnt > 0 || wt.isLocked;
+
+	QString msg;
+	if (!statusOk)
+		msg = QString("Cannot determine the status of worktree %1.\n"
+		              "Removing it may discard uncommitted modifications.").arg(name);
+	else if (dirtyCnt > 0)
+		msg = QString("Worktree %1 contains %2 uncommitted or untracked file(s).\n"
+		              "Removing it will discard them.").arg(name).arg(dirtyCnt);
+	else
+		msg = QString("Remove worktree %1?").arg(name);
+
+	if (wt.isLocked)
+		msg += "\n\nThe worktree is locked"
+		       + (wt.lockReason.isEmpty() ? QString(".") : ": " + wt.lockReason);
+
+	msg += "\n\n" + wt.path + "\n\nThe directory will be deleted.";
+
+	// all variants are always offered: the status check cannot predict every
+	// refusal (e.g. git refuses a clean worktree containing submodules
+	// without --force), and on failure git reports why
+	QString cmd("git worktree remove ");
+	switch (confirmWorktreeRemove(title, msg, warn ? QMessageBox::Warning : QMessageBox::Question)) {
+	case WorktreeRemoveNormal:
+		break;
+	case WorktreeRemoveForced:
+		cmd += "--force ";
+		break;
+	case WorktreeRemoveForcedTwice:
+		cmd += "--force --force ";
+		break;
+	default:
+		return;
+	}
+	cmd += Git::quote(wt.path);
+
+	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+	if (git->run(cmd))
+		statusBar()->showMessage("Removed worktree: " + wt.path, 5000);
+	else
+		statusBar()->showMessage("Failed to remove worktree " + wt.path);
+	refreshRepo(true);
+	QApplication::restoreOverrideCursor();
+}
+
 void MainImpl::ActSplitView_activated() {
 
 	Domain* t;
@@ -1680,11 +1853,31 @@ void MainImpl::ActShowTree_toggled(bool b) {
 
 	if (b) {
 		treeView->show();
+		updateLeftPaneVisibility();
 		UPDATE_DOMAIN(rv);
 	} else {
 		saveCurrentGeometry();
 		treeView->hide();
+		updateLeftPaneVisibility();
 	}
+}
+
+void MainImpl::ActShowWorktrees_toggled(bool b) {
+
+	if (b) {
+		worktreeView->setWorktrees(git->getWorktrees());
+		worktreeView->show();
+	} else {
+		saveCurrentGeometry();
+		worktreeView->hide();
+	}
+	updateLeftPaneVisibility();
+}
+
+void MainImpl::updateLeftPaneVisibility() {
+
+	// isHidden() reflects the explicit show/hide, also before the window is shown
+	leftSplitter->setVisible(!treeView->isHidden() || !worktreeView->isHidden());
 }
 
 void MainImpl::ActSaveFile_activated() {
@@ -2051,6 +2244,110 @@ void MainImpl::ActCheckout_activated()
 	cmd.append(" ").append(rev);
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
 	if (!git->run(cmd)) statusBar()->showMessage("Failed to checkout " + rev);
+	refreshRepo(true);
+	QApplication::restoreOverrideCursor();
+}
+
+void MainImpl::ActCreateWorktree_activated() {
+
+	const QString sha = lineEditSHA->text();
+	QString branch;
+	const QString &selected_name = revision_variables.value(SELECTED_NAME).toString();
+	const QString &current_branch = revision_variables.value(CURRENT_BRANCH).toString();
+	const QStringList &local_branches = revision_variables.value(REV_LOCAL_BRANCHES).toStringList();
+
+	// a local branch can be used directly only if it is not checked out
+	// in some worktree (git refuses to check out the same branch twice)
+	const bool canUseSelected = !selected_name.isEmpty()
+	    && local_branches.contains(selected_name)
+	    && selected_name != current_branch
+	    && !git->isBranchInOtherWorktree(selected_name);
+
+	if (!canUseSelected) {
+		// ask for (new) local branch name (cf. ActCheckout_activated)
+		QString title("Create worktree - ");
+		if (selected_name.isEmpty())
+			title += QString("revision ") + sha.mid(0, 8);
+		else
+			title += QString("branch ") + selected_name;
+
+		// merge all reference names into a single list
+		const QStringList &rmts = revision_variables.value(REV_REMOTE_BRANCHES).toStringList();
+		QStringList all_names;
+		all_names << local_branches;
+		for (QStringList::const_iterator it = rmts.begin(), end = rmts.end(); it != end; ++it) {
+			// drop initial <origin>/ from name
+			int pos = it->indexOf('/'); if (pos < 0) continue;
+			all_names << it->mid(pos + 1);
+		}
+		revision_variables.insert("ALL_NAMES", all_names);
+
+		const QString branchKey("local branch name");
+		InputDialog dlg(QString("%combobox[editable,ref,empty]:%1=$ALL_NAMES%").arg(branchKey),
+		                revision_variables, title, this);
+		dlg.setMinimumWidth(400);
+
+		if (dlg.exec() != QDialog::Accepted) return;
+
+		branch = dlg.value(branchKey).toString();
+
+		if (branch == current_branch) {
+			statusBar()->showMessage(QString("Cannot create worktree: branch '%1' is checked out in this worktree")
+			                         .arg(branch));
+			return;
+		}
+		if (git->isBranchInOtherWorktree(branch)) {
+			statusBar()->showMessage(QString("Cannot create worktree: branch '%1' is checked out in worktree %2")
+			                         .arg(branch, git->otherWorktreeOfBranch(branch)));
+			return;
+		}
+	} else
+		branch = selected_name;
+
+	// empty branch name creates a detached worktree at the selected revision
+	// ask for the worktree location, defaulting to .worktrees/<branch|sha>
+	const QString pathKey("worktree location");
+	InputDialog::VariableMap pathVars;
+	pathVars.insert("WT_PATH", ".worktrees/" + (branch.isEmpty() ? sha.mid(0, 8) : branch));
+	InputDialog pathDlg(QString("%lineedit:%1=$WT_PATH%").arg(pathKey), pathVars,
+	                     "Create worktree", this);
+	pathDlg.setMinimumWidth(400);
+	if (pathDlg.exec() != QDialog::Accepted) return;
+
+	QString path = pathDlg.value(pathKey).toString();
+	if (path.isEmpty()) {
+		statusBar()->showMessage("Worktree location must not be empty");
+		return;
+	}
+
+	// compose the command: git worktree add [options] <path> [<commit-ish>]
+	// - a commit-ish that is not a branch name creates a detached worktree,
+	//   so an existing branch must be passed by name
+	QString cmd = "git worktree add ";
+	QString rev = sha;
+	if (branch.isEmpty()) {
+		cmd += "--detach ";
+	} else {
+		SCRef refsha = git->getRefSha(branch, Git::BRANCH, true);
+		if (refsha == sha) {
+			rev = branch; // existing branch at the selected commit
+		} else if (!refsha.isEmpty()) {
+			if (QMessageBox::warning(this, "Create worktree " + branch,
+			                         QString("Branch %1 already exists. Reset?").arg(branch),
+			                         QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+			    != QMessageBox::Yes)
+				return;
+			cmd += "-B " + branch + " "; // reset existing branch at the selected commit
+		} else
+			cmd += "-b " + branch + " "; // create new branch at the selected commit
+	}
+	cmd += path + " " + rev;
+
+	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
+	if (git->run(cmd))
+		statusBar()->showMessage("Created worktree: " + path, 5000);
+	else
+		statusBar()->showMessage("Failed to create worktree " + path);
 	refreshRepo(true);
 	QApplication::restoreOverrideCursor();
 }
@@ -2585,6 +2882,49 @@ MainImpl::PushConfirmation MainImpl::confirmGitPush(const QString& text)
 
 	// Covers Cancel and closing the dialog via the window decoration.
 	return PushCancelled;
+}
+
+MainImpl::WorktreeRemoveConfirmation MainImpl::confirmWorktreeRemove(
+        const QString& title, const QString& text, QMessageBox::Icon icon)
+{
+	QMessageBox msgBox(icon, title, text, QMessageBox::NoButton, this);
+
+	QAbstractButton* removeBtn = msgBox.addButton("&Remove", QMessageBox::AcceptRole);
+	QAbstractButton* forceBtn = msgBox.addButton("Use The &Force",
+	                                             QMessageBox::DestructiveRole);
+	QAbstractButton* force2Btn = msgBox.addButton("With &extreme prejudice",
+	                                              QMessageBox::DestructiveRole);
+	QAbstractButton* cancelBtn = msgBox.addButton("&Cancel", QMessageBox::RejectRole);
+
+	removeBtn->setToolTip("Run git worktree remove.\n\n"
+	                      "Git refuses to remove a worktree with uncommitted or\n"
+	                      "untracked files, submodules, or a lock.");
+	forceBtn->setToolTip("Pass --force to git worktree remove.\n\n"
+	                     "Removes the worktree even if it has uncommitted or untracked\n"
+	                     "files or contains submodules. Uncommitted work is lost.");
+	force2Btn->setToolTip("Pass --force twice to git worktree remove.\n\n"
+	                      "Same as force, and also removes a locked worktree.");
+
+	// unlike a push, removal deletes a directory, so nothing is the default
+	// action except Cancel; Escape maps to Cancel as well
+	if (QPushButton* defBtn = qobject_cast<QPushButton*>(cancelBtn)) {
+		defBtn->setDefault(true);
+		msgBox.setDefaultButton(defBtn);
+		msgBox.setEscapeButton(defBtn);
+	}
+
+	msgBox.exec();
+
+	QAbstractButton* clicked = msgBox.clickedButton();
+	if (clicked == removeBtn)
+		return WorktreeRemoveNormal;
+	if (clicked == forceBtn)
+		return WorktreeRemoveForced;
+	if (clicked == force2Btn)
+		return WorktreeRemoveForcedTwice;
+
+	// Covers Cancel and closing the dialog via the window decoration.
+	return WorktreeRemoveCancelled;
 }
 
 bool MainImpl::confirmGitOperation(const QString& title, const QString& text, QMessageBox::Icon icon /*= QMessageBox::Question*/)

@@ -131,6 +131,7 @@ available commands and a 'quick jump' tag list.
 |f             |Go to file page
 |<Alt+wheel>   |Go to next/previous page
 |t             |Toggle tree view
+|w             |Toggle worktrees view
 |s             |Toggle view of secondary panes
 |h             |Toggle view of revision header
 |<Home>        |Move to first revision

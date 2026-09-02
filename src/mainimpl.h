@@ -96,6 +96,10 @@ protected slots:
 	void customAction_exited(const QString& name);
 	void goRef_triggered(QAction*);
 	void pushToRemote_triggered(QAction*);
+	void switchWorktree_triggered(QAction*);
+	void switchToWorktree(const QString& path);
+	void removeWorktree(const QString& path);
+	void pruneWorktrees();
 	void changesCommitted(bool);
 	void lineEditSHA_returnPressed();
 	void lineEditFilter_returnPressed();
@@ -125,6 +129,7 @@ protected slots:
 	void ActCommit_activated();
 	void ActAmend_activated();
 	void ActCheckout_activated();
+	void ActCreateWorktree_activated();
 	void ActBranch_activated();
 	void ActBranchRename_activated();
 	void ActTag_activated();
@@ -138,6 +143,7 @@ protected slots:
 	void ActCustomActionSetup_activated();
 	void ActCheckWorkDir_toggled(bool);
 	void ActShowTree_toggled(bool);
+	void ActShowWorktrees_toggled(bool);
 	void ActFilterTree_toggled(bool);
 	void ActAbout_activated();
 	void ActHelp_activated();
@@ -149,6 +155,7 @@ private:
 
 	virtual bool eventFilter(QObject* obj, QEvent* ev);
 	void updateGlobalActions(bool b);
+	void updateLeftPaneVisibility();
 	void updateRevVariables(SCRef sha);
 	void setupShortcuts();
 	int currentTabType(Domain** t);
@@ -188,6 +195,17 @@ private:
 	};
 
 	PushConfirmation confirmGitPush(const QString& text);
+
+	enum WorktreeRemoveConfirmation {
+		WorktreeRemoveCancelled,
+		WorktreeRemoveNormal,
+		WorktreeRemoveForced,     // --force
+		WorktreeRemoveForcedTwice // --force --force
+	};
+
+	WorktreeRemoveConfirmation confirmWorktreeRemove(const QString& title,
+	                                                 const QString& text,
+	                                                 QMessageBox::Icon icon);
 
 	EM_DECLARE(exExiting);
 
