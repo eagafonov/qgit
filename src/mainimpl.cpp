@@ -1595,12 +1595,12 @@ void MainImpl::pushToRemote_triggered(QAction* act) {
 	QString displayName;
 
 	if (localBranches.contains(selected)) {
-		cmd = QString("git push -q %1 %2").arg(remote, selected);
+		cmd = QString("git push %1 %2").arg(remote, selected);
 		confirmationText = QString("Push branch '%1' to remote '%2'").arg(selected, remote);
 		displayName = selected;
 	} else if (selected.startsWith("tags/") && tags.contains(selected.mid(5))) {
 		const QString tagName = selected.mid(5);
-		cmd = QString("git push -q %1 tag %2").arg(remote, tagName);
+		cmd = QString("git push %1 tag %2").arg(remote, tagName);
 		confirmationText = QString("Push tag '%1' to remote '%2'").arg(tagName, remote);
 		displayName = tagName;
 	} else {
@@ -1615,10 +1615,19 @@ void MainImpl::pushToRemote_triggered(QAction* act) {
 	if (confirmation == PushForced)
 		cmd += " --force";
 
+	QString pushStdOut, pushStdErr;
 	QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
-	if (git->run(cmd)) {
+	if (git->runWithStderr(cmd, &pushStdOut, &pushStdErr)) {
 		refreshRepo(true);
 		statusBar()->showMessage(QString("Successfully pushed '%1' to '%2'").arg(displayName, remote), 5000);
+
+		// Show push output if server returned useful info (e.g. MR URL)
+		QString pushOutput = (pushStdOut + pushStdErr).trimmed();
+		if (!pushOutput.isEmpty() &&
+		    pushOutput != "Everything up-to-date" &&
+		    (pushOutput.contains('\n') || pushOutput.size() > 20)) {
+			QMessageBox::information(this, "Git Push Output", pushOutput);
+		}
 	} else {
 		statusBar()->showMessage(QString("Failed to push '%1' to '%2'").arg(displayName, remote), 5000);
 	}
@@ -2226,7 +2235,7 @@ void MainImpl::ActDelete_activated() {
 
 	QString confirmationText = QString("Remove %1 reference(s)?").arg(groups.size());
 
-	for (RefGroupMap::const_iterator g = groups.begin(), gend = groups.end(); g != gend; ++g) {
+	for (auto g: groups) {
 		if (g.key() == "") {
 			confirmationText += QString("\nbranch '%1'").arg(g.value().join(' '));
 		} else if (g.key() == "tags/") {
