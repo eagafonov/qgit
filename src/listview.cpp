@@ -328,8 +328,16 @@ void ListView::mousePressEvent(QMouseEvent* e) {
 	QTreeView::mousePressEvent(e);
 }
 
-void ListView::mouseReleaseEvent(QMouseEvent* e) {
+void ListView::mouseDoubleClickEvent(QMouseEvent* e) {
+	lastRefName = refNameAt(e->pos());
 
+	if (e->button() == Qt::RightButton && filterRightButtonPressed(e))
+		return; // filtered out
+
+	QTreeView::mouseDoubleClickEvent(e);
+}
+
+void ListView::mouseReleaseEvent(QMouseEvent* e) {
 	lastRefName = ""; // reset
 	QTreeView::mouseReleaseEvent(e);
 }
@@ -750,6 +758,7 @@ public:
 	QString name() const {return *cur_name;}
 	int type() {return cur_state;}
 	bool isCurrentBranch() {return *cur_name == cur_branch;}
+	bool inOtherWorktree() {return cur_state == Git::BRANCH && git->isBranchInOtherWorktree(*cur_name);}
 
 	void next();
 };
@@ -1171,6 +1180,8 @@ QPixmap* ListViewDelegate::getTagMarks(SCRef sha, const QStyleOptionViewItem& op
 	for (RefNameIterator it(sha, git); it.valid(); it.next()) {
 		QStyleOptionViewItem o(opt);
 		QString name = it.name();
+		if (it.inOtherWorktree())
+			name.prepend("+ "); // same mark as 'git branch' for linked worktrees
 		getTagMarkParams(name, o, it.type(), it.isCurrentBranch());
 		addTextPixmap(&pm, name, o);
 	}
@@ -1188,6 +1199,8 @@ QString ListView::refNameAt(const QPoint &pos)
 	for (RefNameIterator it(sha(index.row()), git); it.valid(); it.next()) {
 		QStyleOptionViewItem o;
 		QString name = it.name();
+		if (it.inOtherWorktree())
+			name.prepend("+ "); // must match getTagMarks() or hit-testing drifts
 		getTagMarkParams(name, o, it.type(), it.isCurrentBranch());
 
 		QFontMetrics fm(o.font);

@@ -80,7 +80,7 @@ HEADERS += annotate.h cache.h commitimpl.h common.h config.h consoleimpl.h \
            filecontent.h filelist.h fileview.h git.h help.h inputdialog.h lanes.h \
            listview.h mainimpl.h myprocess.h patchcontent.h patchview.h \
            rangeselectimpl.h revdesc.h revsview.h settingsimpl.h \
-           smartbrowse.h treeview.h \
+           smartbrowse.h treeview.h worktreeview.h \
     FileHistory.h
 
 SOURCES += annotate.cpp cache.cpp commitimpl.cpp consoleimpl.cpp \
@@ -88,7 +88,7 @@ SOURCES += annotate.cpp cache.cpp commitimpl.cpp consoleimpl.cpp \
            filecontent.cpp filelist.cpp fileview.cpp git.cpp inputdialog.cpp \
            lanes.cpp listview.cpp mainimpl.cpp myprocess.cpp namespace_def.cpp \
            patchcontent.cpp patchview.cpp qgit.cpp rangeselectimpl.cpp \
-           revdesc.cpp revsview.cpp settingsimpl.cpp smartbrowse.cpp treeview.cpp \
+           revdesc.cpp revsview.cpp settingsimpl.cpp smartbrowse.cpp treeview.cpp worktreeview.cpp \
     FileHistory.cc \
     common.cpp
 

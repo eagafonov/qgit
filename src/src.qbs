@@ -141,6 +141,8 @@ Product {
         "smartbrowse.h",
         "treeview.cpp",
         "treeview.h",
+        "worktreeview.cpp",
+        "worktreeview.h",
         "FileHistory.cc",
         "FileHistory.h",
         "namespace_def.cpp",

@@ -10,6 +10,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QImageReader>
 #include <QPalette>
 #if QT_VERSION < QT_VERSION_CHECK(5, 0, 0)
@@ -394,7 +395,15 @@ const QString Git::getRevInfo(SCRef sha) {
 	QString refsInfo;
 	if (type & BRANCH) {
 		const QString cap(type & CUR_BRANCH ? "HEAD: " : "Branch: ");
-		refsInfo =  cap + getRefNames(sha, BRANCH).join(" ");
+		QStringList names = getRefNames(sha, BRANCH);
+
+		for (QStringList::iterator it = names.begin(); it != names.end(); ++it) {
+			SCRef wtPath = otherWorktreeBranches.value(*it);
+			if (!wtPath.isEmpty())
+				*it += " (worktree: " + wtPath + ")";
+		}
+
+		refsInfo = cap + names.join(" ");
 	}
 	if (type & RMT_BRANCH)
 		refsInfo.append("   Remote branch: " + getRefNames(sha, RMT_BRANCH).join(" "));
@@ -1834,6 +1843,85 @@ bool Git::getBaseDir(SCRef wd, QString& bd, bool& changed) {
         return success;
 }
 
+QString Git::mainWorktreePath(SCRef listedPath) {
+// some git versions (seen with 2.34) list the main worktree of a submodule,
+// whose git dir is in the superproject's .git/modules/<name>, as that git
+// dir instead of its working tree; core.worktree there points to the real
+// working tree, and rev-parse resolves it
+
+	if (!QFileInfo(listedPath + "/HEAD").isFile()
+	    || QFileInfo::exists(listedPath + "/.git"))
+		return listedPath; // a working tree, not a git dir
+
+	QString toplevel;
+	errorReportingEnabled = false;
+	bool ok = run("git -C " + quote(listedPath) + " rev-parse --show-toplevel", &toplevel);
+	errorReportingEnabled = true;
+	toplevel = toplevel.trimmed();
+	return (ok && !toplevel.isEmpty()) ? toplevel : listedPath;
+}
+
+void Git::loadWorktrees() {
+// fills 'worktrees' and 'otherWorktreeBranches', the latter is used to mark
+// branches checked out in other worktrees (cf. 'git branch' marking with '+')
+
+	worktrees.clear();
+	otherWorktreeBranches.clear();
+
+	QString out;
+	errorReportingEnabled = false; // 'git worktree list' is unsupported by old git versions
+	bool ok = run("git worktree list --porcelain", &out);
+	errorReportingEnabled = true;
+	if (!ok)
+		return;
+
+	// porcelain format: blank-line separated blocks, one per worktree
+	//
+	// worktree <path>
+	// HEAD <sha>
+	// branch refs/heads/<name> | detached | bare
+	// [locked [<reason>]]
+	// [prunable [<reason>]]
+	const QString curPath(QFileInfo(workDir).canonicalFilePath());
+	const QStringList blocks(out.split("\n\n", QGIT_SPLITBEHAVIOR(SkipEmptyParts)));
+	FOREACH_SL (it, blocks) {
+		WorktreeInfo wt;
+		const QStringList lines(it->split('\n', QGIT_SPLITBEHAVIOR(SkipEmptyParts)));
+		FOREACH_SL (ln, lines) {
+			if (ln->startsWith("worktree "))
+				wt.path = ln->mid(9);
+			else if (ln->startsWith("HEAD "))
+				wt.head = ln->mid(5);
+			else if (ln->startsWith("branch refs/heads/"))
+				wt.branch = ln->mid(18);
+			else if (*ln == "bare")
+				wt.isBare = true;
+			else if (*ln == "detached")
+				wt.isDetached = true;
+			else if (*ln == "locked" || ln->startsWith("locked ")) {
+				wt.isLocked = true;
+				wt.lockReason = ln->mid(7);
+			} else if (*ln == "prunable" || ln->startsWith("prunable "))
+				wt.isPrunable = true;
+		}
+		if (wt.path.isEmpty())
+			continue;
+
+		if (worktrees.isEmpty() && !wt.isBare)
+			wt.path = mainWorktreePath(wt.path);
+
+		// compare canonical paths: a detached current worktree has no branch
+		// name to compare with, and paths may differ by symlinks
+		SCRef wtCanonical = QFileInfo(wt.path).canonicalFilePath();
+		wt.isCurrent = !wtCanonical.isEmpty() && wtCanonical == curPath;
+
+		if (!wt.isCurrent && !wt.branch.isEmpty())
+			otherWorktreeBranches.insert(wt.branch, wt.path);
+
+		worktrees.append(wt);
+	}
+}
+
 Git::Reference* Git::lookupOrAddReference(const ShaString& sha) {
         RefMap::iterator it(refsShaMap.find(sha));
         if (it == refsShaMap.end()) it = refsShaMap.insert(sha, Reference());
@@ -1873,6 +1961,8 @@ bool Git::getRefs() {
         curBranchName = curBranchName.section('\n', 0, 0).trimmed();
         if (curBranchName.contains(" detached "))
             curBranchName = "";
+
+        loadWorktrees();
 
         // read refs, normally unsorted
         QString runOutput;

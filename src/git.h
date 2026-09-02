@@ -61,6 +61,21 @@ public:
 	};
 	typedef QList<TreeEntry> TreeInfo;
 
+	struct WorktreeInfo { // one entry of 'git worktree list --porcelain'
+		WorktreeInfo() : isBare(false), isDetached(false), isLocked(false),
+		                 isPrunable(false), isCurrent(false) {}
+		QString path;
+		QString head;       // empty for bare
+		QString branch;     // short name, empty when detached or bare
+		QString lockReason;
+		bool isBare;
+		bool isDetached;
+		bool isLocked;
+		bool isPrunable;    // worktree directory is missing
+		bool isCurrent;     // the worktree qgit is showing
+	};
+	typedef QVector<WorktreeInfo> WorktreeList;
+
 	void setDefaultModel(FileHistory* fh) { revData = fh; }
 	void checkEnvironment();
 	void userInfo(SList info);
@@ -102,6 +117,9 @@ public:
 	bool getTree(SCRef ts, TreeInfo& ti, bool wd, SCRef treePath);
 	static const QString getLocalDate(SCRef gitDate);
 	const QString getCurrentBranchName() const {return curBranchName;}
+	bool isBranchInOtherWorktree(SCRef branch) const { return otherWorktreeBranches.contains(branch); }
+	const QString otherWorktreeOfBranch(SCRef branch) const { return otherWorktreeBranches.value(branch); }
+	const WorktreeList& getWorktrees() const { return worktrees; }
 #if QT_VERSION < QT_VERSION_CHECK(5, 0, 0)
 	const QString getDesc(SCRef sha, QRegExp& slogRE, QRegExp& lLogRE, bool showH, FileHistory* fh);
 #else
@@ -224,6 +242,8 @@ private:
 	MyProcess* runAsScript(SCRef cmd, QObject* rcv = NULL, SCRef buf = "");
 	const QStringList getArgs(bool* quit, bool repoChanged);
 	bool getRefs();
+	void loadWorktrees();
+	QString mainWorktreePath(SCRef listedPath);
 	void parseStGitPatches(SCList patchNames, SCList patchShas);
 	void clearRevs();
 	void clearFileNames();
@@ -284,6 +304,8 @@ private:
 	QString filesLoadingPending;
 	QString filesLoadingCurSha;
 	QString curBranchName;
+	QHash<QString, QString> otherWorktreeBranches; // branch name -> worktree path, branch is checked out in that (non-current) worktree
+	WorktreeList worktrees; // in 'git worktree list' order, main worktree first
 	int filesLoadingStartOfs;
 	bool cacheNeedsUpdate;
 	bool errorReportingEnabled;
