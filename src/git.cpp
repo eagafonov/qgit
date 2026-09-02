@@ -394,7 +394,15 @@ const QString Git::getRevInfo(SCRef sha) {
 	QString refsInfo;
 	if (type & BRANCH) {
 		const QString cap(type & CUR_BRANCH ? "HEAD: " : "Branch: ");
-		refsInfo =  cap + getRefNames(sha, BRANCH).join(" ");
+		QStringList names = getRefNames(sha, BRANCH);
+
+		for (QStringList::iterator it = names.begin(); it != names.end(); ++it) {
+			SCRef wtPath = otherWorktreeBranches.value(*it);
+			if (!wtPath.isEmpty())
+				*it += " (worktree: " + wtPath + ")";
+		}
+
+		refsInfo = cap + names.join(" ");
 	}
 	if (type & RMT_BRANCH)
 		refsInfo.append("   Remote branch: " + getRefNames(sha, RMT_BRANCH).join(" "));
@@ -1873,6 +1881,42 @@ bool Git::getRefs() {
         curBranchName = curBranchName.section('\n', 0, 0).trimmed();
         if (curBranchName.contains(" detached "))
             curBranchName = "";
+
+        // map branches checked out in other worktrees, to mark them in the
+        // revision list (cf. 'git branch' marking such branches with '+')
+        otherWorktreeBranches.clear();
+        {
+                QString worktreeListOutput;
+                errorReportingEnabled = false; // 'git worktree list' is unsupported by old git versions
+                bool ok = run("git worktree list --porcelain", &worktreeListOutput);
+                errorReportingEnabled = true;
+                if (ok) {
+                        // porcelain format: blank-line separated blocks
+                        //
+                        // worktree <path>
+                        // HEAD <sha>
+                        // branch refs/heads/<name>
+                        //
+                        // worktree <path>
+                        // HEAD <sha>
+                        // detached
+                        const QStringList blocks(worktreeListOutput.split("\n\n", QGIT_SPLITBEHAVIOR(SkipEmptyParts)));
+                        FOREACH_SL (it, blocks) {
+                                QString branch, path;
+                                const QStringList lines(it->split('\n', QGIT_SPLITBEHAVIOR(SkipEmptyParts)));
+                                FOREACH_SL (ln, lines) {
+                                        if (ln->startsWith("branch refs/heads/"))
+                                                branch = ln->mid(18);
+                                        else if (ln->startsWith("worktree "))
+                                                path = ln->mid(9);
+                                }
+
+                                if (!branch.isEmpty() && branch != curBranchName) {
+                                    otherWorktreeBranches.insert(branch, path);
+                                }
+                        }
+                }
+        }
 
         // read refs, normally unsorted
         QString runOutput;

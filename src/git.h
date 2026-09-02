@@ -102,6 +102,8 @@ public:
 	bool getTree(SCRef ts, TreeInfo& ti, bool wd, SCRef treePath);
 	static const QString getLocalDate(SCRef gitDate);
 	const QString getCurrentBranchName() const {return curBranchName;}
+	bool isBranchInOtherWorktree(SCRef branch) const { return otherWorktreeBranches.contains(branch); }
+	const QString otherWorktreeOfBranch(SCRef branch) const { return otherWorktreeBranches.value(branch); }
 #if QT_VERSION < QT_VERSION_CHECK(5, 0, 0)
 	const QString getDesc(SCRef sha, QRegExp& slogRE, QRegExp& lLogRE, bool showH, FileHistory* fh);
 #else
@@ -284,6 +286,7 @@ private:
 	QString filesLoadingPending;
 	QString filesLoadingCurSha;
 	QString curBranchName;
+	QHash<QString, QString> otherWorktreeBranches; // branch name -> worktree path, branch is checked out in that (non-current) worktree
 	int filesLoadingStartOfs;
 	bool cacheNeedsUpdate;
 	bool errorReportingEnabled;
