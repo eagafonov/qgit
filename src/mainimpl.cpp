@@ -1448,6 +1448,9 @@ void MainImpl::doContexPopup(SCRef sha) {
 	if (isRevPage && ActViewDiffNewTab->isEnabled())
 		contextMenu.addAction(ActViewDiffNewTab);
 
+	if (ActMarkDiffToSha->isEnabled())
+		contextMenu.addAction(ActMarkDiffToSha);
+
 	if (!isFilePage && ActExternalDiff->isEnabled())
 		contextMenu.addAction(ActExternalDiff);
 
