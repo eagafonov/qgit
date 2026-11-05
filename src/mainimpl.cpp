@@ -1487,6 +1487,12 @@ void MainImpl::doContexPopup(SCRef sha) {
 
 		contextMenu.addSeparator();
 
+		// goRef_triggered() resolves "HEAD" via git rev-parse
+		const QStringList headSha(git->getAllRefSha(Git::CUR_BRANCH));
+		QAction* actGoHead = contextMenu.addAction("HEAD");
+		actGoHead->setData("Ref");
+		actGoHead->setEnabled(!headSha.isEmpty() && git->revLookup(headSha.first()));
+
 		QStringList bn(git->getAllRefNames(Git::BRANCH, Git::optOnlyLoaded));
 		bn.sort();
 		prepareRefSubmenu(&contextBrnMenu, bn);
